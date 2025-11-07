@@ -18,6 +18,42 @@ bl_info = {
 
 import bpy
 import math
+import re
+import urllib.request
+
+def _to_raw_github_url(url: str) -> str:
+    """将 GitHub blob 页面 URL 转换为 raw 内容 URL"""
+    try:
+        # 例如: https://github.com/user/repo/blob/branch/path -> https://raw.githubusercontent.com/user/repo/branch/path
+        m = re.match(r"https://github.com/([^/]+)/([^/]+)/blob/([^/]+)/(.*)", url)
+        if m:
+            user, repo, branch, path = m.groups()
+            return f"https://raw.githubusercontent.com/{user}/{repo}/{branch}/{path}"
+        return url
+    except Exception:
+        return url
+
+def _fetch_text(url: str) -> str:
+    """获取远程文本内容，添加基本的 User-Agent"""
+    req = urllib.request.Request(_to_raw_github_url(url), headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        data = resp.read()
+        # 尝试按 utf-8 解码
+        try:
+            return data.decode('utf-8')
+        except Exception:
+            return data.decode('latin-1', errors='ignore')
+
+def _parse_version_tuple(text: str):
+    """从文本中解析类似 1.2.3 的版本元组，无法解析则返回 None"""
+    m = re.search(r"(\d+)\.(\d+)\.(\d+)", text)
+    if not m:
+        return None
+    return tuple(int(p) for p in m.groups())
+
+def _is_newer_version(remote, local):
+    """比较远程与本地版本元组，远程更大返回 True"""
+    return remote is not None and local is not None and remote > local
 
 # 全局变量存储当前面板类别
 current_panel_category = "Damped Track"
@@ -520,6 +556,67 @@ class SubdivideAverageOperator(bpy.types.Operator):
             context.window_manager.popup_menu(self.show_continue_dialog_avg, title="执行FK绑定?", icon='INFO')
         
         return {'FINISHED'}
+
+# --- Update Check Operator ---
+class WM_OT_CheckAddonUpdate(bpy.types.Operator):
+    bl_idname = "wm.check_addon_update"
+    bl_label = "检查更新"
+    bl_description = "从远程版本文件比对当前版本，必要时下载并覆盖更新"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    # 供确认弹窗显示的远程版本和下载地址
+    new_version_str: bpy.props.StringProperty(default="")
+    script_url: bpy.props.StringProperty(default="")
+
+    def draw(self, context):
+        layout = self.layout
+        if self.new_version_str:
+            layout.label(text=f"发现新版本：{self.new_version_str}", icon='INFO')
+            layout.label(text="点击确定将下载并覆盖当前脚本，然后重载脚本。", icon='FILE_SCRIPT')
+        else:
+            layout.label(text="未检测到新版本。", icon='INFO')
+
+    def invoke(self, context, event):
+        try:
+            version_url = "https://github.com/yancongya/publish/blob/main/Quick%20Cartilage%20Rigging/version.txt"
+            script_url = "https://github.com/yancongya/publish/blob/main/Quick%20Cartilage%20Rigging/Quick%20Cartilage%20Rigging.py"
+            remote_text = _fetch_text(version_url)
+            remote_ver = _parse_version_tuple(remote_text)
+            # 读取本地版本：直接使用本模块的 bl_info
+            local_ver = tuple(bl_info.get('version', (0, 0, 0)))
+            if remote_ver is None:
+                self.report({'ERROR'}, "远程版本文件解析失败")
+                return {'CANCELLED'}
+            if _is_newer_version(remote_ver, local_ver):
+                self.new_version_str = '.'.join(map(str, remote_ver))
+                self.script_url = script_url
+                return context.window_manager.invoke_props_dialog(self, width=380)
+            else:
+                self.report({'INFO'}, "已经是最新版本")
+                return {'CANCELLED'}
+        except Exception as e:
+            self.report({'ERROR'}, f"检查更新失败: {e}")
+            return {'CANCELLED'}
+
+    def execute(self, context):
+        # 下载并覆盖脚本，然后重载
+        try:
+            url = self.script_url or "https://github.com/yancongya/publish/blob/main/Quick%20Cartilage%20Rigging/Quick%20Cartilage%20Rigging.py"
+            content = _fetch_text(url)
+            # 写入当前脚本文件
+            addon_file = __file__
+            with open(addon_file, 'w', encoding='utf-8', newline='\n') as f:
+                f.write(content)
+            # 重载所有脚本，使更新生效
+            try:
+                bpy.ops.script.reload()
+            except Exception:
+                pass
+            self.report({'INFO'}, "更新完成并已尝试重载脚本")
+            return {'FINISHED'}
+        except Exception as e:
+            self.report({'ERROR'}, f"更新失败: {e}")
+            return {'CANCELLED'}
     
     def show_continue_dialog_avg(self, menu, context):
         layout = menu.layout
@@ -877,6 +974,9 @@ def get_panel_class(category):
             col.operator(WM_OT_SwitchEditMode.bl_idname, text="编辑", icon='EDITMODE_HLT')
             col = row.column()
             col.operator(WM_OT_SwitchPoseMode.bl_idname, text="姿态", icon='POSE_HLT')
+            # 顶部添加刷新版本按钮
+            col = row.column()
+            col.operator(WM_OT_CheckAddonUpdate.bl_idname, text="刷新版本", icon='FILE_REFRESH')
             layout.separator()
 
             # 分割工具部分
@@ -904,6 +1004,7 @@ def get_panel_class(category):
             dt_col = row.column()
             dt_col.enabled = is_pose_mode
             dt_col.operator(ApplyPoseConstraintsOperator.bl_idname, icon='CON_TRACKTO')
+            # 刷新版本按钮已移动到顶部模式切换栏
 
             # 控制器属性部分（仅在姿态模式下且有活动骨骼时显示）
             if is_pose_mode and context.active_bone:
@@ -1272,6 +1373,7 @@ classes = (
     SubdivideAverageOperator,
     SetupControlRigOperator,
     ApplyPoseConstraintsOperator,
+    WM_OT_CheckAddonUpdate,
     WM_OT_ToggleShowAllCtrlBones,
     WM_OT_ToggleShowFirstOnlyCtrlBone,
     WM_OT_ClosePanel,
