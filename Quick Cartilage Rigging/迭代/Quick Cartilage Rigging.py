@@ -7,7 +7,7 @@
 bl_info = {
     "name": "🦴快速软骨绑定",
     "author": "烟囱鸭",
-    "version": (1, 1, 0),
+    "version": (1, 0, 0),
     "blender": (2, 80, 0),
     "location": "3D View > UI > Damped Track",
     "description": "提供骨骼自动细分、FK绑定和阻尼追踪约束设置功能",
