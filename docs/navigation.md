@@ -23,6 +23,9 @@
 *   **[控制器属性](advanced/controller-properties.md)**
 *   **[检查更新](advanced/update-check.md)**
 
-### 💻 API 参考
-*   **[操作符 (Operators)](api/operators.md)**
-*   **[属性 (Properties)](api/properties.md)**
+### 🛠️ 开发者指南
+*   **[开发者入门](development/getting-started.md)**
+*   **[插件架构](development/architecture.md)**
+*   **[API参考与开发接口](development/api-reference.md)**
+*   **[扩展功能](development/extending.md)**
+*   **[贡献指南](development/contributing.md)**
